@@ -97,12 +97,14 @@ def clustfisher(X, K):
 # ---------------------------------------------------------------------------
 
 
-def clustkmeans(X, K):
+def clustkmeans(X, K, n_init=10, random_state=0):
     """
     Classification en K groupes par K-means (scikit-learn).
 
-    X : array (n, p) (ou (n,) pour des données 1D)
-    K : nombre de groupes souhaité
+    X            : array (n, p) (ou (n,) pour des données 1D)
+    K            : nombre de groupes souhaité
+    n_init       : nombre d'initialisations (la meilleure est conservée)
+    random_state : graine, pour reproduire les résultats
 
     Retourne :
       cluster : labels des classes (1..K), de longueur n
@@ -119,7 +121,7 @@ def clustkmeans(X, K):
         raise ValueError("K doit être un entier vérifiant 1 <= K <= n")
 
     # Plusieurs initialisations, avec une graine fixe pour reproduire les résultats
-    modele = KMeans(n_clusters=K, n_init=10, random_state=0)
+    modele = KMeans(n_clusters=K, n_init=n_init, random_state=random_state)
     cluster = modele.fit_predict(X) + 1
     C = inertie(X, cluster)
 

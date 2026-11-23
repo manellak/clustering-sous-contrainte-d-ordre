@@ -58,6 +58,14 @@ class TestMethodesComparatives(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         methode([0, 2, 4], K)
 
+    def test_kmeans_une_initialisation(self):
+        X = np.random.default_rng(0).normal(size=(20, 2))
+        cluster1, C1 = clustkmeans(X, 3, n_init=1, random_state=5)
+        cluster2, C2 = clustkmeans(X, 3, n_init=1, random_state=5)
+        np.testing.assert_array_equal(cluster1, cluster2)
+        self.assertAlmostEqual(C1, C2)
+        self.assertEqual(set(cluster1), {1, 2, 3})
+
     def test_kmeans_reproductible(self):
         X = np.random.default_rng(0).normal(size=(20, 2))
         cluster1, C1 = clustkmeans(X, 3)

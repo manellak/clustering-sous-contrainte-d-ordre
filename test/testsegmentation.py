@@ -1,8 +1,8 @@
 """
 Tests de la segmentation de Fisher : propriétés, séquences simulées et jeux de données.
 
-Ils complètent testutils.py (diam, clustfisher) et testcomparaison.py
-(K-means, Ward, inertie, ARI, silhouette) sans les répéter. Ils portent sur :
+Ils complètent testutils.py (diam, clustfisher, K-means, Ward, inertie,
+ARI, silhouette) sans les répéter. Ils portent sur :
   - les propriétés du critère (translation, échelle, inversion de la séquence) ;
   - le comportement sur une séquence simulée comme sequencesimu
     (régime récurrent, fusion des régimes, effet de l'ordre) ;

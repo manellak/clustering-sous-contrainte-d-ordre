@@ -1,0 +1,624 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+
+\definecolor{bleu}{HTML}{2563EB}
+\definecolor{fondcode}{HTML}{F5F7FA}
+\definecolor{fondencadre}{HTML}{F0F7FF}
+
+\captionsetup{font=small,labelfont=bf}
+\setlength{\emergencystretch}{3em}
+\setlist{itemsep=2pt,topsep=4pt}
+\graphicspath{{figures/}}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{fondcode},
+  keywordstyle=\color{bleu}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{teal},
+  frame=single, rulecolor=\color{gray!30},
+  breaklines=true, showstringspaces=false,
+  numbers=left, numberstyle=\tiny\color{gray},
+  inputencoding=utf8, extendedchars=true,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ç}{{\c{c}}}1 {ê}{{\^e}}1
+           {É}{{\'E}}1 {’}{{'}}1 {ô}{{\^o}}1 {î}{{\^i}}1 {û}{{\^u}}1
+}
+
+% Encadré de synthèse
+\newcommand{\synthese}[1]{%
+  \par\smallskip\noindent
+  \fcolorbox{blue!25}{fondencadre}{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule}{\small #1}}%
+  \par\smallskip}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Classification sous contrainte d'ordre}
+\fancyhead[R]{\small M2 Machine Learning -- Clustering}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{Classification sous contrainte d'ordre}\\[4pt]
+\large Algorithme de Fisher, application aux données \texttt{aiguillage}\\
+et \texttt{sequencesimu}, comparaison avec K-means et la CAH de Ward}
+\author{Manel LAKROUZ \and Sirine BOUGHANEM}
+\date{Master 2 Machine Learning -- Novembre 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent
+Ce rapport présente la mise en œuvre de l'algorithme de Fisher pour la
+classification d'observations \emph{ordonnées}, c'est-à-dire la segmentation
+d'une séquence en $K$ blocs contigus minimisant l'inertie intra-classe.
+L'algorithme, fondé sur la programmation dynamique, fournit l'optimum global
+du critère. Nous l'implémentons en Python, le validons par une batterie de
+tests unitaires (dont une comparaison à une recherche exhaustive), puis
+l'appliquons à deux jeux de données : les données réelles \texttt{aiguillage}
+(140 signaux de 552 variables, 4 classes connues) et les données simulées
+\texttt{sequencesimu} (160 points en dimension 2, nombre de segments inconnu,
+choisi par la méthode du coude). Dans les deux cas, la partition obtenue est
+comparée à celles de K-means et de la classification ascendante hiérarchique
+(CAH) de Ward. Fisher retrouve exactement les classes d'\texttt{aiguillage} et
+met en évidence, sur \texttt{sequencesimu}, quatre périodes dont deux partagent
+le même comportement moyen, distinction que les méthodes non contraintes ne
+peuvent pas faire.
+\end{abstract}
+
+\tableofcontents
+
+% =====================================================================
+\section{Introduction}
+
+En classification non supervisée, on cherche à regrouper des observations
+$x_1,\dots,x_n \in \mathbb{R}^p$ en $K$ classes homogènes. Les méthodes
+classiques comme K-means ou la CAH ignorent toute structure liée à l'ordre des
+observations : deux points peuvent être regroupés quel que soit leur
+emplacement dans le jeu de données.
+
+Dans de nombreuses applications, pourtant, les observations sont naturellement
+\textbf{ordonnées} : mesures successives d'un capteur, signaux enregistrés au
+cours du temps, positions le long d'un génome\dots{} On souhaite alors que chaque
+classe corresponde à un \textbf{segment} de la séquence, c'est-à-dire à un
+ensemble d'observations consécutives. On parle de \emph{classification sous
+contrainte d'ordre} ou de \emph{segmentation}. Le problème revient à placer
+$K-1$ instants de rupture le long de la séquence.
+
+L'algorithme de Fisher (1958), qui s'appuie sur le principe d'optimalité de
+Bellman (1962), résout ce problème de manière exacte par programmation
+dynamique. Le projet s'organise en quatre parties :
+\begin{enumerate}
+  \item implémentation de la fonction de diamètre \texttt{diam} et de
+        l'algorithme \texttt{clustfisher} ;
+  \item implémentation des méthodes de comparaison (K-means, CAH de Ward) et
+        des critères d'évaluation (inertie, ARI, silhouette), avec tests unitaires ;
+  \item segmentation des données \texttt{aiguillage} en $K=4$ classes et
+        comparaison à la partition de référence ;
+  \item segmentation des données simulées \texttt{sequencesimu}, choix de $K$
+        par la méthode du coude et comparaison avec deux autres algorithmes.
+\end{enumerate}
+
+% =====================================================================
+\section{L'algorithme de Fisher}
+
+\subsection{Formulation du problème}
+
+Pour un segment $(x_a,\dots,x_b)$ avec $a\le b$, on définit son
+\textbf{diamètre} comme son inertie :
+\[
+D(a,b) = \sum_{i=a}^{b} \lVert x_i - \mu_{ab} \rVert^2,
+\qquad \mu_{ab} = \frac{1}{b-a+1}\sum_{i=a}^{b} x_i .
+\]
+Une partition en $K$ segments est entièrement déterminée par les débuts des
+segments $2,\dots,K$, notés $1 < t_1 < t_2 < \dots < t_{K-1} \le n$. Le critère
+à minimiser est l'inertie intra-classe :
+\[
+C(t_1,\dots,t_{K-1}) = D(1, t_1 - 1) + \sum_{k=2}^{K-1} D(t_{k-1}, t_k - 1) + D(t_{K-1}, n).
+\]
+Le nombre de partitions possibles est $\binom{n-1}{K-1}$, ce qui interdit une
+énumération exhaustive dès que $n$ est grand (pour $n=160$ et $K=4$, plus de
+$6{,}6\times10^5$ partitions ; pour $K=10$, plus de $10^{13}$).
+
+\subsection{Programmation dynamique}
+
+L'algorithme repose sur le principe de Bellman : \emph{toute sous-partition
+d'une partition optimale est optimale}. Notons $M(i,k)$ le critère optimal pour
+découper les $i$ premières observations en $k$ segments. On a alors
+\[
+M(i,1) = D(1,i), \qquad
+M(i,k) = \min_{k \le t \le i} \bigl[ M(t-1, k-1) + D(t, i) \bigr], \quad 2\le k \le K,\ k\le i \le n,
+\]
+où $t$ est le début du dernier segment. L'algorithme comporte quatre étapes :
+\begin{enumerate}
+  \item \textbf{Calcul de la matrice triangulaire supérieure} $D(a,b)$ pour $1\le a\le b\le n$.
+  \item \textbf{Calcul récursif des critères optimaux} $M(i,k)$, en conservant
+        dans une matrice $A(i,k)$ l'indice $t$ qui réalise le minimum.
+  \item \textbf{Remontée (\emph{backtracking})} : $t_{K-1} = A(n,K)$, puis
+        $t_{k-1} = A(t_k - 1, k)$ pour $k = K-1,\dots,2$.
+  \item \textbf{Construction des labels} : les observations de $t_{k-1}$ à $t_k - 1$
+        reçoivent le label $k$ (avec $t_0=1$ et $t_K = n+1$).
+\end{enumerate}
+Le critère optimal est $C = M(n,K)$. L'étape 2 coûte $O(Kn^2)$ opérations ;
+le calcul de $D$ coûte $O(n^2p)$ si l'on utilise des sommes cumulées.
+
+\subsection{Propriétés}
+
+\begin{itemize}
+  \item \textbf{Optimalité globale} : contrairement à K-means, qui ne trouve qu'un
+        optimum local dépendant de l'initialisation, Fisher fournit la meilleure
+        partition en $K$ segments contigus.
+  \item \textbf{Déterminisme} : à données, ordre et $K$ fixés, le résultat est
+        toujours le même.
+  \item \textbf{Solutions pour tout $k\le K$} : la matrice $M$ contient $M(n,k)$
+        pour tous les $k\le K$, ce qui facilite le choix du nombre de segments.
+  \item \textbf{Dépendance à l'ordre} : la méthode n'a de sens que si l'ordre des
+        observations porte une information.
+\end{itemize}
+
+% =====================================================================
+\section{Implémentation et validation}
+
+\subsection{Organisation du code}
+
+L'ensemble des fonctions est regroupé dans le module \texttt{utils.py}. Les
+observations sont les lignes de la matrice $X$ ; les indices de segments suivent
+la convention mathématique (à partir de 1) et les labels renvoyés vont de $1$ à $K$.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Fonction} & \textbf{Rôle} & \textbf{Sortie} \\
+\midrule
+\texttt{diam(X, a, b)} & diamètre $D(a,b)$ du segment $(x_a,\dots,x_b)$ & réel \\
+\texttt{clustfisher(X, K)} & segmentation optimale de Fisher & ruptures, labels, $C$ \\
+\texttt{clustkmeans(X, K)} & K-means, 10 initialisations, graine fixe & labels, inertie \\
+\texttt{clustward(X, K)} & CAH avec le critère de Ward & labels, inertie \\
+\texttt{inertie(X, cluster)} & inertie intra-classe d'une partition & réel \\
+\texttt{compare\_partitions(c1, c2)} & indice de Rand ajusté (ARI) & réel \\
+\texttt{silhouette(X, cluster)} & silhouette moyenne (distance euclidienne) & réel \\
+\bottomrule
+\end{tabular}
+\caption{Fonctions du module \texttt{utils.py}.}
+\end{table}
+
+Le cœur de \texttt{clustfisher} (étapes 2 et 3) est vectorisé sur l'indice $t$ :
+
+\begin{lstlisting}
+for k in range(2, K + 1):
+    for i in range(k, n + 1):
+        ts = np.arange(k, i + 1)                  # t = k, ..., i
+        valeurs = M[ts - 1, k - 1] + D[ts, i]
+        M[i, k] = valeurs.min()
+        A[i, k] = ts[np.argmin(valeurs)]
+
+k, m = K - 1, n                                  # remontée
+while k >= 1:
+    t[k] = A[m, k + 1]
+    m = t[k] - 1
+    k -= 1
+\end{lstlisting}
+
+K-means et Ward sont appelés depuis \texttt{scikit-learn}. Pour comparer
+équitablement les trois méthodes, l'inertie de K-means et de Ward est recalculée
+avec la fonction \texttt{inertie}, qui utilise exactement le même critère que Fisher.
+
+\subsection{Critères de comparaison}
+
+\begin{itemize}
+  \item \textbf{Inertie intra-classe} $\sum_k \sum_{i\in C_k}\lVert x_i-\mu_k\rVert^2$ :
+        mesure la compacité des classes (plus faible = plus compact).
+  \item \textbf{Indice de Rand ajusté (ARI)} : mesure l'accord entre deux partitions,
+        indépendamment de la numérotation des classes. Il vaut 1 pour deux
+        partitions identiques et environ 0 pour un accord dû au hasard.
+  \item \textbf{Silhouette moyenne} : pour chaque point,
+        $s_i = (b_i - a_i)/\max(a_i,b_i)$, où $a_i$ est la distance moyenne aux
+        points de sa classe et $b_i$ la distance moyenne à la classe voisine la plus
+        proche. Une valeur proche de 1 indique des classes bien séparées.
+  \item \textbf{Nombre de changements de classe} le long de la séquence : il vaut
+        exactement $K-1$ pour une segmentation en blocs contigus.
+\end{itemize}
+
+\subsection{Tests unitaires}
+
+Deux fichiers de tests (\texttt{unittest}) vérifient le module, soit
+\textbf{40 tests, tous réussis}.
+\begin{itemize}
+  \item \texttt{testutils.py} (22 tests) : valeurs connues de \texttt{diam} en
+        dimension 1 et $p$, égalité $D(a,b) = (b-a+1)\times$ variance, cas $K=1$ et
+        $K=n$ (critère nul), paliers évidents, cohérence entre ruptures et labels,
+        égalité entre $C$ et la somme des diamètres, décroissance de $C$ en $K$,
+        gestion des entrées invalides, et surtout \textbf{comparaison avec une
+        recherche exhaustive} sur de petites séquences, qui confirme
+        l'optimalité de la programmation dynamique.
+  \item \texttt{testcomparaison.py} (18 tests) : K-means et Ward sur des groupes
+        séparés ou non contigus, reproductibilité de K-means, invariance de l'ARI
+        aux permutations de labels, inertie de Fisher, valeur connue de la silhouette.
+\end{itemize}
+
+% =====================================================================
+\section{Application aux données \texttt{aiguillage}}
+
+\subsection{Données}
+
+Le fichier contient $n=140$ observations décrites par $p=552$ variables (des
+signaux mesurés lors de manœuvres d'aiguillages ferroviaires), plus une
+553\textsuperscript{e} colonne donnant la classe de référence. Les quatre classes
+comptent 35, 40, 45 et 20 observations et \textbf{se succèdent par blocs} dans le
+fichier. Les classes de référence ne servent qu'à l'évaluation. Nous fixons
+$K=4$ et travaillons sur les données brutes, sans standardisation.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{aig_profils}
+\caption{Profils moyens des quatre classes de référence.}
+\label{fig:aig-profils}
+\end{figure}
+
+La figure~\ref{fig:aig-profils} montre que les classes 3 et 4 ont des profils
+très différents, alors que les classes 1 et 2 se ressemblent sur la majorité des
+variables : leur séparation est la principale difficulté.
+
+\subsection{Résultats}
+
+Fisher place les débuts des segments 2, 3 et 4 aux observations
+\textbf{36, 76 et 121}, soit les intervalles 1--35, 36--75, 76--120 et 121--140 :
+ce sont \textbf{exactement les frontières des classes de référence}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Méthode} & \textbf{Inertie} & \textbf{ARI / vérité} & \textbf{Silhouette} & \textbf{Changements} \\
+\midrule
+Fisher  & 10\,457\,795 & \textbf{1,000} & 0,507 & 3 \\
+K-means & \textbf{10\,346\,193} & 0,943 & \textbf{0,512} & 9 \\
+Ward    & 10\,599\,310 & 0,859 & 0,498 & 7 \\
+\bottomrule
+\end{tabular}
+\caption{Comparaison des trois partitions sur \texttt{aiguillage} ($K=4$).
+L'inertie de la partition de référence vaut 10\,457\,795.}
+\label{tab:aig}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{Fisher} reproduit parfaitement la partition de référence (ARI $=1$,
+        aucun désaccord).
+  \item \textbf{K-means} obtient l'inertie la plus faible mais un ARI de 0,94 :
+        3 observations sont mal affectées (22, 67 et 69), toutes entre les classes 1 et 2.
+  \item \textbf{Ward} obtient un ARI de 0,86 : 8 désaccords, dont le bloc 19--25
+        de la classe 1 rattaché à la classe 2, et l'observation 67.
+\end{itemize}
+L'ARI entre K-means et Ward vaut 0,87 : les deux méthodes non contraintes
+produisent des partitions proches, mais différentes.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{aig_sequence}
+\caption{Partitions le long de la séquence (classes renumérotées pour
+correspondre au mieux aux vraies classes). Pointillés : frontières des vraies classes.}
+\label{fig:aig-seq}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{aig_acp}
+\caption{Projection sur les deux premiers axes de l'ACP (93,3\,\% de la variance).
+L'ACP sert uniquement à la visualisation.}
+\label{fig:aig-acp}
+\end{figure}
+
+La figure~\ref{fig:aig-acp} confirme que les classes 3 et 4 sont bien séparées,
+alors que les classes 1 et 2 se recouvrent partiellement : c'est dans cette zone
+que K-means et Ward se trompent.
+
+\subsection{Compacité et accord avec la vérité}
+
+K-means a une inertie \emph{plus faible} que Fisher tout en étant \emph{moins}
+fidèle à la vérité. Ce n'est pas une contradiction : Fisher minimise l'inertie
+parmi les seules partitions en segments contigus, alors que K-means cherche dans
+un ensemble beaucoup plus grand. Sur ces données, la contrainte d'ordre apporte
+une information supplémentaire, la contiguïté des classes, qui permet de lever la
+confusion entre les classes 1 et 2.
+
+\subsection{Influence de l'ordre}
+
+Pour vérifier ce rôle de l'ordre, nous avons mélangé aléatoirement les lignes
+(cinq fois). L'ARI de Fisher chute alors entre \textbf{0,010 et 0,027}, tandis que
+celui de K-means reste à 0,943 : quand les classes ne sont plus contiguës, quatre
+segments ne peuvent plus les représenter.
+
+\synthese{\textbf{Bilan \texttt{aiguillage}.} Fisher retrouve exactement les quatre
+classes (ruptures 36, 76, 121). K-means et Ward font respectivement 3 et 8 erreurs,
+toutes entre les classes 1 et 2. L'avantage de Fisher vient de la contrainte d'ordre,
+pertinente ici car les classes se succèdent par blocs.}
+
+% =====================================================================
+\section{Application aux données simulées \texttt{sequencesimu}}
+
+\subsection{Données}
+
+La séquence comporte $n=160$ observations en dimension $p=2$ (\texttt{var1},
+\texttt{var2}). Cette fois, \textbf{le nombre de segments est inconnu} et
+\textbf{aucune partition de référence n'est fournie}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{seq_donnees}
+\caption{Les deux variables dans l'ordre de la séquence (à gauche) et nuage de
+points coloré selon la position (à droite).}
+\label{fig:seq-donnees}
+\end{figure}
+
+On distingue des changements de niveau : \texttt{var2} monte vers 3 entre les
+observations 50 et 80, \texttt{var1} monte vers 4 en fin de séquence. Le nuage
+montre trois zones, autour de $(0,0)$, $(0,3)$ et $(4,0)$, la zone $(0,0)$ étant
+visitée au début \emph{et} au milieu de la séquence.
+
+\subsection{Choix du nombre de segments par la méthode du coude}
+
+Nous calculons le critère optimal $C(K)$ de Fisher pour $K=1,\dots,15$.
+$C(K)$ décroît nécessairement avec $K$ ; on cherche donc la valeur au-delà de
+laquelle un segment supplémentaire ne réduit plus que faiblement le critère.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}crrrl@{}}
+\toprule
+$K$ & $C(K)$ & Gain $C(K-1)-C(K)$ & Gain relatif & Ruptures \\
+\midrule
+1 & 884,1 & -- & -- & -- \\
+2 & 503,6 & 380,6 & 43,0\,\% & 131 \\
+3 & 462,0 & 41,6 & 8,3\,\% & 81, 131 \\
+\textbf{4} & \textbf{300,6} & \textbf{161,4} & \textbf{34,9\,\%} & \textbf{51, 81, 131} \\
+5 & 292,4 & 8,2 & 2,7\,\% & 51, 81, 129, 133 \\
+6 & 285,5 & 6,9 & 2,4\,\% & 51, 69, 81, 129, 133 \\
+\bottomrule
+\end{tabular}
+\caption{Critère de Fisher et gains pour les premières valeurs de $K$.}
+\label{tab:coude}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\linewidth]{seq_coude}
+\caption{Méthode du coude : critère $C(K)$ (à gauche) et gain apporté par le
+$K$-ième segment (à droite).}
+\label{fig:coude}
+\end{figure}
+
+Le critère chute fortement jusqu'à $K=4$, puis chaque segment supplémentaire ne
+fait plus gagner que 7 à 8 unités (moins de 3\,\%), et la courbe devient presque
+linéaire. Le faible gain de $K=2$ à $K=3$ s'explique par la position des ruptures :
+avec $K=3$, le premier segment 1--80 mélange encore deux niveaux de \texttt{var2},
+que seule la rupture en 51 (ajoutée pour $K=4$) sépare. Au-delà de $K=4$, les
+segments ajoutés ne font qu'ajuster le bruit (par exemple le petit segment 129--132).
+\textbf{Nous retenons $K=4$.}
+
+\subsection{Segmentation de Fisher}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}ccrrrrr@{}}
+\toprule
+Segment & Observations & Effectif & Moy. var1 & Moy. var2 & É.-t. var1 & É.-t. var2 \\
+\midrule
+1 & 1--50    & 50 & $-0{,}06$ & $0{,}00$ & 0,98 & 0,95 \\
+2 & 51--80   & 30 & $0{,}09$ & $2{,}93$ & 0,98 & 0,93 \\
+3 & 81--130  & 50 & $-0{,}10$ & $-0{,}06$ & 0,93 & 0,95 \\
+4 & 131--160 & 30 & $3{,}88$ & $0{,}16$ & 1,12 & 0,94 \\
+\bottomrule
+\end{tabular}
+\caption{Description des quatre segments de Fisher ($C(4) = 300{,}6$).}
+\label{tab:segments}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\linewidth]{seq_fisher}
+\caption{Segmentation de Fisher ($K=4$). Les traits pleins indiquent la moyenne
+de chaque segment.}
+\label{fig:seq-fisher}
+\end{figure}
+
+Chaque segment correspond à un régime moyen : $(0,0)$, $(0,3)$, $(0,0)$ et
+$(4,0)$. Les écarts-types sont tous proches de 1 : les données semblent simulées
+avec un bruit de variance constante, seule la moyenne changeant aux ruptures.
+Point important, \textbf{les segments 1 et 3 ont la même moyenne} : Fisher les
+distingue uniquement parce qu'ils sont séparés dans le temps par le segment 2.
+
+\subsection{Comparaison avec K-means et la CAH de Ward}
+
+Nous appliquons K-means et Ward avec le même nombre de classes, $K=4$.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Méthode} & \textbf{Inertie} & \textbf{Silhouette} & \textbf{Changements} & \textbf{ARI avec Fisher} \\
+\midrule
+Fisher  & 300,6 & 0,155 & 3  & 1,000 \\
+K-means & \textbf{202,9} & 0,372 & 75 & 0,390 \\
+Ward    & 246,6 & \textbf{0,374} & 45 & 0,392 \\
+\bottomrule
+\end{tabular}
+\caption{Comparaison des trois partitions sur \texttt{sequencesimu} ($K=4$).
+L'ARI entre K-means et Ward vaut 0,432.}
+\label{tab:seq}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{seq_partitions}
+\caption{Les trois partitions dans le plan (en haut) et le long de la séquence
+(en bas). Pointillés : ruptures de Fisher.}
+\label{fig:seq-parts}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}c|cccc@{\hspace{1.5cm}}c|cccc@{}}
+\multicolumn{5}{c}{\textbf{Fisher $\times$ K-means}} & \multicolumn{5}{c}{\textbf{Fisher $\times$ Ward}} \\
+\toprule
+Seg. & G1 & G2 & G3 & G4 & Seg. & G1 & G2 & G3 & G4 \\
+\midrule
+1 & 0 & 3 & 23 & 24 & 1 & 44 & 0 & 1 & 5 \\
+2 & 0 & 28 & 2 & 0 & 2 & 5 & 0 & 25 & 0 \\
+3 & 0 & 2 & 27 & 21 & 3 & 41 & 0 & 2 & 7 \\
+4 & 27 & 0 & 0 & 3 & 4 & 0 & 21 & 0 & 9 \\
+\bottomrule
+\end{tabular}
+\caption{Tableaux croisés entre les segments de Fisher (lignes) et les groupes de
+K-means et de Ward (colonnes).}
+\label{tab:croises}
+\end{table}
+
+\paragraph{Interprétation.}
+\begin{itemize}
+  \item \textbf{Compacité.} K-means et Ward ont une inertie plus faible et une
+        silhouette nettement meilleure. La silhouette faible de Fisher (0,155)
+        s'explique par les segments 1 et 3, qui se superposent dans le plan.
+  \item \textbf{Structure temporelle.} K-means et Ward changent de classe 75 et 45 fois
+        le long de la séquence, contre 3 pour Fisher : leurs groupes ne
+        correspondent pas à des périodes.
+  \item \textbf{Désaccords.} Les segments 2 et 4, de moyennes distinctes, sont
+        largement retrouvés par les deux méthodes. Les segments 1 et 3 sont en revanche
+        mélangés : K-means coupe la zone $(0,0)$ en deux moitiés, tandis que Ward les
+        réunit (85 observations sur 100) et forme un groupe de points intermédiaires
+        situés entre $(0,0)$ et $(4,0)$.
+  \item \textbf{Désaccord entre K-means et Ward} (ARI 0,43) : avec seulement trois
+        zones dans le plan, former quatre groupes impose un découpage arbitraire,
+        différent d'une méthode à l'autre.
+\end{itemize}
+
+\subsection{Analyse complémentaire : trois régimes, quatre périodes}
+
+Puisque les segments 1 et 3 ont la même moyenne, nous les avons fusionnés pour
+obtenir trois \emph{régimes} et comparé cette partition à K-means et Ward appliqués
+avec $K=3$.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Partition} & \textbf{ARI avec les 3 régimes de Fisher} \\
+\midrule
+K-means ($K=3$) & \textbf{0,805} \\
+Ward ($K=3$)    & 0,634 \\
+K-means ($K=4$) & 0,470 \\
+Ward ($K=4$)    & 0,641 \\
+\bottomrule
+\end{tabular}
+\caption{Accord entre les régimes de Fisher et les méthodes non contraintes.}
+\end{table}
+
+La fusion ne modifie presque pas l'inertie (300,7 contre 300,6), mais la
+silhouette passe de 0,155 à 0,442. Avec $K=3$, K-means retrouve bien les trois
+régimes : seules 10 observations sur 160 sont affectées à un autre régime. Ward
+reste moins proche, car sa hiérarchie isole toujours un groupe de points
+intermédiaires.
+
+\synthese{\textbf{Bilan \texttt{sequencesimu}.} La méthode du coude donne $K=4$ et
+Fisher découpe la séquence en 1--50, 51--80, 81--130 et 131--160. La série comporte
+donc \textbf{quatre périodes mais seulement trois comportements moyens}. Seul Fisher,
+grâce à la contrainte d'ordre, distingue les périodes 1 et 3 ; K-means et Ward
+décrivent plutôt les \emph{états} visités par la série.}
+
+% =====================================================================
+\section{Discussion}
+
+\subsection{Quand utiliser la contrainte d'ordre ?}
+
+Les deux applications illustrent la même idée sous deux angles :
+\begin{itemize}
+  \item sur \texttt{aiguillage}, la contrainte d'ordre est \textbf{cohérente avec la
+        structure réelle} des données (classes rangées par blocs) et améliore
+        l'accord avec la vérité par rapport aux méthodes non contraintes ;
+  \item sur \texttt{sequencesimu}, elle permet de \textbf{dater les changements de
+        régime} et de distinguer deux périodes de même distribution, ce qu'aucun
+        critère géométrique ne peut faire ;
+  \item à l'inverse, l'expérience des lignes mélangées montre que Fisher
+        \textbf{échoue} lorsque l'ordre ne porte pas d'information.
+\end{itemize}
+Les critères internes classiques (inertie, silhouette) favorisent
+systématiquement les méthodes non contraintes, puisqu'ils ignorent l'ordre. Ils
+ne doivent donc pas être le seul élément de comparaison : le nombre de
+changements de classe, et surtout la question posée (segmenter une séquence ou
+identifier des états), sont déterminants.
+
+\subsection{Limites et pistes d'amélioration}
+
+\begin{itemize}
+  \item \textbf{Coût de calcul.} Notre implémentation calcule chaque $D(a,b)$
+        directement, soit $O(n^3p)$ opérations pour la matrice $D$. Le temps reste
+        faible pour nos données (environ 0,2\,s pour $n=200$, 0,9\,s pour $n=400$
+        en dimension 2), mais l'utilisation de sommes cumulées de $x_i$ et
+        $\lVert x_i\rVert^2$ ramènerait ce calcul à $O(n^2p)$. La mémoire en
+        $O(n^2)$ limite aussi la taille des séquences traitables.
+  \item \textbf{Choix de $K$.} La méthode du coude reste une règle visuelle. Elle
+        est très nette sur \texttt{sequencesimu}, mais pourrait être ambiguë sur
+        des données plus bruitées ; des critères pénalisés (BIC, pente du critère)
+        permettraient d'automatiser ce choix.
+  \item \textbf{Critère utilisé.} L'inertie suppose des segments de forme
+        sphérique et de variance comparable. Elle est sensible à l'échelle des
+        variables : une standardisation peut être nécessaire lorsque les variables
+        ne sont pas homogènes.
+  \item \textbf{Régimes récurrents.} Fisher attribue une classe différente à chaque
+        segment, même lorsque deux segments ont le même comportement. Un
+        regroupement \emph{a posteriori} des segments, ou un modèle de Markov caché,
+        permettrait d'identifier directement les régimes récurrents.
+\end{itemize}
+
+% =====================================================================
+\section{Conclusion}
+
+Nous avons implémenté l'algorithme de Fisher par programmation dynamique,
+validé son optimalité par des tests, dont une comparaison à une recherche
+exhaustive, et l'avons comparé à K-means et à la CAH de Ward sur deux jeux de données.
+
+Sur les données \texttt{aiguillage}, Fisher retrouve \textbf{exactement} les quatre
+classes de référence, alors que K-means et Ward confondent quelques observations
+des classes 1 et 2. Sur les données simulées \texttt{sequencesimu}, la méthode du
+coude conduit sans ambiguïté à \textbf{quatre segments}, qui révèlent une série
+alternant trois régimes moyens, le premier réapparaissant après le deuxième.
+
+Ces résultats montrent que la classification sous contrainte d'ordre n'est pas
+un simple cas particulier de la classification classique : en exploitant
+l'ordre des observations, elle répond à une question différente (\emph{quand} la
+série change-t-elle ?) et fournit une solution exacte, déterministe et directement
+interprétable. Elle doit toutefois être réservée aux situations où l'ordre porte
+réellement une information.
+
+\vfill
+\noindent\rule{\linewidth}{0.4pt}
+\small
+\textbf{Références.} W. D. Fisher (1958), \emph{On grouping for maximum homogeneity},
+Journal of the American Statistical Association, 53(284), 789--798. --
+R. Bellman, principe d'optimalité de la programmation dynamique. --
+Cours de clustering, M2 Machine Learning, chapitre 6.
+
+\end{document}

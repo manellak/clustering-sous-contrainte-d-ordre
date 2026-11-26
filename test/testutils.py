@@ -1,5 +1,8 @@
 """
-Tests unitaires pour utils.py : Fisher, méthodes comparatives et évaluation.
+Tests unitaires pour utils.py :
+  - diam et clustfisher ;
+  - méthodes comparatives (K-means, CAH de Ward) ;
+  - critères de comparaison (inertie, ARI, silhouette).
 
 Lancement depuis la racine du projet :
     python -m unittest test.testutils -v
@@ -16,13 +19,8 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils import (  # noqa: E402
-    diam,
-    clustfisher,
-    clustkmeans,
-    clustward,
-    compare_partitions,
-    inertie,
-    silhouette,
+    diam, clustfisher, clustkmeans, clustward,
+    compare_partitions, inertie, silhouette,
 )
 
 
@@ -190,9 +188,6 @@ class TestClustfisher(unittest.TestCase):
         t, cluster, C = clustfisher([0, 0, 9, 9], 2)
         np.testing.assert_array_equal(t, [3])
         np.testing.assert_array_equal(cluster, [1, 1, 2, 2])
-
-
-# Méthodes comparatives et critères d’évaluation
 
 
 class TestMethodesComparatives(unittest.TestCase):

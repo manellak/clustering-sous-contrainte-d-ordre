@@ -1,4 +1,19 @@
+"""
+Fonctions de classification et d'évaluation des partitions.
+
+Les lignes de X représentent les observations, les colonnes les variables.
+Fisher respecte l'ordre des observations ; K-means et Ward sont non contraints.
+Les méthodes de classification renvoient des labels à partir de 1.
+"""
+
 import numpy as np
+from sklearn.cluster import AgglomerativeClustering, KMeans
+from sklearn.metrics import adjusted_rand_score, silhouette_score
+
+
+# ---------------------------------------------------------------------------
+# 1. Classification sous contrainte d’ordre : Fisher
+# ---------------------------------------------------------------------------
 
 
 def diam(X, a, b):
@@ -33,12 +48,12 @@ def clustfisher(X, K):
     if X.ndim == 1:
         X = X.reshape(-1, 1)
     n = X.shape[0]
-    if not 1 <= K <= n:
-        raise ValueError("K doit vérifier 1 <= K <= n")
+    if not isinstance(K, (int, np.integer)) or not 1 <= K <= n:
+        raise ValueError("K doit être un entier vérifiant 1 <= K <= n")
 
-    
-    # Initialisation 
-    D = np.zeros((n + 1, n + 1)) 
+
+    # Initialisation
+    D = np.zeros((n + 1, n + 1))
     M = np.zeros((n + 1, K + 1))
     A = np.zeros((n + 1, K + 1), dtype=int)
     t = np.zeros(K, dtype=int)            # t[1..K-1]
@@ -68,10 +83,144 @@ def clustfisher(X, K):
         m = t[k] - 1
         k -= 1
 
-    # Étape 5 : critère et labels
+    # Étape 4 : critère et labels
     C = M[n, K]
     bornes = [1] + list(t[1:K]) + [n + 1]   # débuts des segments, puis n+1
     for k in range(1, K + 1):
         cluster[bornes[k - 1]:bornes[k]] = k
 
     return t[1:], cluster[1:], C
+
+
+# ---------------------------------------------------------------------------
+# 2. Méthodes comparatives : K-means et CAH Ward
+# ---------------------------------------------------------------------------
+
+
+def clustkmeans(X, K, n_init=10, random_state=0):
+    """
+    Classification en K groupes par K-means (scikit-learn).
+
+    X            : array (n, p) (ou (n,) pour des données 1D)
+    K            : nombre de groupes souhaité
+    n_init       : nombre d'initialisations (la meilleure est conservée)
+    random_state : graine, pour reproduire les résultats
+
+    Retourne :
+      cluster : labels des classes (1..K), de longueur n
+      C       : inertie intra-classe
+
+    Les groupes ne sont pas nécessairement contigus dans la séquence.
+    Si des points sont identiques, moins de K groupes peuvent être obtenus.
+    """
+    X = np.asarray(X, dtype=float)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    n = X.shape[0]
+    if not isinstance(K, (int, np.integer)) or not 1 <= K <= n:
+        raise ValueError("K doit être un entier vérifiant 1 <= K <= n")
+
+    # Plusieurs initialisations, avec une graine fixe pour reproduire les résultats
+    modele = KMeans(n_clusters=K, n_init=n_init, random_state=random_state)
+    cluster = modele.fit_predict(X) + 1
+    C = inertie(X, cluster)
+
+    return cluster, C
+
+
+def clustward(X, K):
+    """
+    Classification ascendante hiérarchique de Ward (scikit-learn).
+
+    X : array (n, p) (ou (n,) pour des données 1D)
+    K : nombre de groupes souhaité
+
+    Retourne :
+      cluster : labels des classes (1..K), de longueur n
+      C       : inertie intra-classe
+
+    Les groupes ne sont pas nécessairement contigus dans la séquence.
+    """
+    X = np.asarray(X, dtype=float)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    n = X.shape[0]
+    if not isinstance(K, (int, np.integer)) or not 1 <= K <= n:
+        raise ValueError("K doit être un entier vérifiant 1 <= K <= n")
+
+    # Un seul point forme directement un groupe
+    if n == 1:
+        return np.ones(1, dtype=int), 0.0
+
+    modele = AgglomerativeClustering(n_clusters=K, linkage="ward")
+    cluster = modele.fit_predict(X) + 1
+    C = inertie(X, cluster)
+
+    return cluster, C
+
+
+# ---------------------------------------------------------------------------
+# 3. Critères d’évaluation : inertie, ARI et silhouette
+# ---------------------------------------------------------------------------
+
+
+def inertie(X, cluster):
+    """
+    Inertie intra-classe d'une partition (même critère que Fisher).
+
+    X       : array (n, p) (ou (n,) pour des données 1D)
+    cluster : labels des classes, de longueur n
+    """
+    X = np.asarray(X, dtype=float)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    cluster = np.asarray(cluster)
+    if cluster.ndim != 1 or len(cluster) != len(X):
+        raise ValueError("cluster doit contenir un label par observation")
+
+    C = 0.0
+    for k in np.unique(cluster):
+        groupe = X[cluster == k]
+        mu = groupe.mean(axis=0)
+        C += ((groupe - mu) ** 2).sum()
+
+    return C
+
+
+def compare_partitions(cluster1, cluster2):
+    """
+    Compare deux partitions des mêmes observations avec l'indice de Rand ajusté.
+
+    cluster1, cluster2 : labels des classes, de même longueur
+
+    Retourne :
+      ARI : 1 pour deux partitions identiques, même si les labels diffèrent ;
+            proche de 0 pour un accord au hasard, peut être négatif.
+    """
+    return adjusted_rand_score(cluster1, cluster2)
+
+
+def silhouette(X, cluster):
+    """
+    Silhouette moyenne d'une partition, avec la distance euclidienne.
+
+    X       : array (n, p) (ou (n,) pour des données 1D)
+    cluster : labels des classes, de longueur n
+
+    Retourne :
+      S : score entre -1 et 1 ; proche de 1 pour des groupes bien séparés.
+
+    Il faut entre 2 et n-1 groupes. Les vraies classes ne sont pas nécessaires.
+    """
+    X = np.asarray(X, dtype=float)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    cluster = np.asarray(cluster)
+    if cluster.ndim != 1 or len(cluster) != len(X):
+        raise ValueError("cluster doit contenir un label par observation")
+
+    K = len(np.unique(cluster))
+    if not 2 <= K <= len(X) - 1:
+        raise ValueError("La silhouette nécessite entre 2 et n-1 groupes")
+
+    return silhouette_score(X, cluster, metric="euclidean")
